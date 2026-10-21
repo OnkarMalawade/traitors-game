@@ -1,57 +1,54 @@
-# TRAITORS — Party Game Starter
+# TRAITORS — Trust No One
 
-A mobile-first, dark editorial UI for a social deduction game. Built with Next.js 14, React, TypeScript, and Lucide icons; designed to deploy on Vercel.
+Next.js party game with Supabase-backed anonymous player sessions, live lobby roster, invite codes, room capacity enforcement, private role retrieval, and server-side room/game setup.
 
-## Important status
-This ZIP contains a polished **interactive UI prototype**, not a production multiplayer backend yet. It supports the screens and a local demo flow, but multiple devices do not share live lobby state. The join flow is a mock and the QR/link do not yet enforce server-side expiration or player limits. Do not present it as a live online game until the backend plan below is implemented.
+## Before you deploy
 
-## Run locally
-1. Install Node.js 20+.
-2. Copy `.env.example` to `.env.local` if you are preparing the backend integration (the UI prototype itself can run without Supabase).
-3. Run:
-   ```bash
-   npm install
-   npm run dev
-   ```
-4. Open http://localhost:3000.
+This project needs a Supabase project. The browser key is a **publishable/anon key**, not a service-role key. Never put a service-role key in a `NEXT_PUBLIC_` variable.
 
-## Deploy to Vercel
-1. Upload this folder to a new GitHub repository.
-2. Import the repository at https://vercel.com/new.
-3. Framework preset: Next.js; build command `npm run build`.
-4. Deploy. No environment variables are required for the prototype.
-5. Add Supabase environment variables only after implementing and testing the realtime backend.
+### 1. Configure Supabase
 
-## Game rules represented in the UI
-- Host sets a player cap from 4 to 20.
-- Host selects an 8- or 10-minute round and a word category.
-- All players except one should receive the same secret word.
-- One random player is the traitor and sees no word.
-- Players discuss clues, then vote; reveal the traitor and word.
+1. Open your Supabase project and go to **SQL Editor**.
+2. Run the full script in `supabase/setup.sql`.
+3. Go to **Authentication → Sign In / Providers** and enable **Anonymous Sign-Ins**. Players do not need to fill in a login form; Supabase creates a private anonymous session for their browser.
+4. Confirm Realtime is enabled for the project. The SQL script adds the player and room tables to `supabase_realtime` where supported.
 
-## Recommended production architecture
-- **Frontend:** Next.js on Vercel.
-- **Realtime room state:** Supabase Postgres + Realtime (Broadcast/Presence or database changes).
-- **Server-only game logic:** Supabase Edge Functions or Next.js Route Handlers using a server-only service role key. Never expose the service role key to the browser.
-- **Room invite:** cryptographically random opaque token, store only a hash, `expires_at = created_at + interval '10 minutes'`.
-- **Room membership:** transaction/SQL RPC locks room row, rejects expired/started/full rooms, and enforces one player per membership identity. Maximum is the host-configured cap (4–20).
-- **Roles/word secrecy:** never broadcast the word or traitor identity in shared room state. Deliver each player's role privately after joining. The traitor receives `role='traitor'` and no word.
-- **Game timer:** server timestamp is authoritative; clients render remaining time based on `ends_at`. Do not trust client timers.
-- **Voting:** one vote per player; enforce with a database unique constraint; tally only when voting closes.
-- **Abuse prevention:** rate-limit room creation/join, validate names and category server-side, avoid logging invite tokens, and add cleanup for expired rooms.
-- **Scale:** use stateless Next.js handlers and managed Postgres/realtime. Load-test concurrent room creation, joins, disconnect/reconnect, and timer/vote transitions before advertising support for “lots of users.”
+### 2. Configure environment variables
 
-## Suggested implementation phases
-1. **Phase 1 — UI & UX:** this prototype, responsive layouts, accessibility, category selection.
-2. **Phase 2 — Real multiplayer:** schema, secure RPC for room creation/join, realtime lobby updates, reconnect support.
-3. **Phase 3 — Gameplay integrity:** private role delivery, authoritative timer, voting, tie rules, reveal state.
-4. **Phase 4 — Production hardening:** rate limits, expiry cleanup, observability, load testing, privacy and retention policy.
-5. **Phase 5 — Polish:** sound toggle, animations, reconnect banners, moderation/reporting, additional word packs.
+Create `.env.local` from `.env.example` and fill in your project's values:
 
-## Product decisions to settle
-- The host counts as a player (recommended).
-- Link expiration: ten minutes after lobby creation; once joined, the room can continue after the invite expires.
-- The 4–20 player rule applies to starting a game; host can wait with fewer than four.
-- The timer should be selected as 8 or 10 minutes (rather than arbitrary minutes).
-- If votes tie, recommended rule: one short revote among tied players; if still tied, the traitor escapes.
-- For large-scale usage, consider room capacity, rate limits, regional latency, and database connection limits before adding more features.
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY
+```
+
+Do not commit `.env.local` or share private service-role keys.
+
+### 3. Run locally
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000` in two or more browser sessions to test creating and joining a room.
+
+### 4. Deploy to Vercel
+
+1. Push this folder to GitHub and import it at https://vercel.com/new.
+2. In Vercel → Project → Settings → Environment Variables, add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` for Preview and Production.
+3. Redeploy after adding the variables.
+4. Test with at least four separate browser sessions/devices.
+
+## What's connected
+
+- Real room creation through a Supabase RPC.
+- Anonymous session per browser, so no visible registration form is needed.
+- Server-side checks for player name, room capacity (4–20), allowed duration/category, invite expiry, and host-only game start.
+- Real joins and roster updates across devices (Realtime + periodic refresh fallback).
+- Random traitor selection and private role/word lookup via an RPC; secret word and traitor ID are not exposed by the lobby-state RPC.
+- Vote submission and guarded reveal RPC.
+
+## MVP limitations
+
+This is a multiplayer starter, not yet a fully hardened commercial game. The discussion timer and some screen transitions are client-rendered; voting does not yet provide a full public vote tally/revote/tie flow. Test the SQL script in a fresh Supabase project before inviting players. Add rate limiting, room cleanup, abuse controls, production monitoring, and a security review before scaling. Do not expose a service-role key in the frontend.
