@@ -203,12 +203,13 @@ export default function Home() {
         if((role as any).traitor_player_id) setTraitorId((role as any).traitor_player_id);
       }
 
-      // Sync screen based on backend status
+      // Sync screen based on backend status:
+      // IMPORTANT: DO NOT bounce back to 'role' if user has already pressed 'I am ready' and is on 'game'!
       if(r.status==="playing") {
         const endTime=r.phase_ends_at;
         const rem=endTime?Math.max(0,Math.floor((new Date(endTime).getTime()-Date.now())/1000)):duration*60;
         setSeconds(rem);
-        if(screen==="lobby") setScreen("role");
+        setScreen(curr => (curr === "lobby" ? "role" : curr));
       } else if(r.status==="voting") {
         setScreen("vote");
       } else if(r.status==="vote_result") {
@@ -412,6 +413,10 @@ export default function Home() {
   };
 
   const fmt = (s:number) => `${Math.floor(s/60).toString().padStart(2,"0")}:${(s%60).toString().padStart(2,"0")}`;
+
+  const lastVotedPlayerName = useMemo(()=>players.find(p=>p.id===lastVotedOutId)?.name || null,[players,lastVotedOutId]);
+  const lastKilledPlayerName = useMemo(()=>players.find(p=>p.id===lastKilledId)?.name || null,[players,lastKilledId]);
+  const traitorName = useMemo(()=>players.find(p=>p.id===traitorId)?.name || "The Traitor",[players,traitorId]);
 
   return (
     <main className="shell">
@@ -640,7 +645,7 @@ export default function Home() {
             )}
           </button>
           <div className="role-warning"><LockKeyhole size={16}/> Keep your role to yourself. The game depends on it.</div>
-          <button className="btn primary" onClick={startRound}>I'm ready <ArrowRight size={18}/></button>
+          <button className="btn primary" onClick={startRound}>I&apos;m ready <ArrowRight size={18}/></button>
         </section>
       )}
 
@@ -653,6 +658,38 @@ export default function Home() {
             </span>
             <div className="timer"><Timer size={17}/>{fmt(seconds)}</div>
           </div>
+
+          {/* Previous round activity feed */}
+          {round > 1 && (
+            <div style={{marginTop: 10}}>
+              {lastVotedPlayerName && (
+                <div className="round-event-card voted">
+                  <Skull size={18}/>
+                  <div>
+                    <b>Round {round - 1} Vote: {lastVotedPlayerName} was voted out!</b>
+                    <small>The crew eliminated an innocent player. The Traitor survived!</small>
+                  </div>
+                </div>
+              )}
+              {lastKilledPlayerName ? (
+                <div className="round-event-card killed">
+                  <Skull size={18}/>
+                  <div>
+                    <b>Night Strike: {lastKilledPlayerName} was assassinated by the Traitor!</b>
+                    <small>They were not shielded and are now eliminated.</small>
+                  </div>
+                </div>
+              ) : (
+                <div className="round-event-card shielded">
+                  <ShieldCheck size={18}/>
+                  <div>
+                    <b>Night Strike BLOCKED!</b>
+                    <small>The Traitor attacked a shielded player. The rescue shield saved them!</small>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="chat-game-heading">
             <div>
@@ -772,7 +809,7 @@ export default function Home() {
               <ShieldCheck size={28}/>
               <div>
                 <b>Rescue Shield Available!</b>
-                <p>Since there are {alivePlayers.length} alive players remaining, the crew can vote to rescue 1 player from the Traitor's kill.</p>
+                <p>Since there are {alivePlayers.length} alive players remaining, the crew can vote to rescue 1 player from the Traitor&apos;s kill.</p>
               </div>
             </div>
           ) : (
@@ -797,7 +834,7 @@ export default function Home() {
           <div className="panel-heading">
             <div className="eyebrow"><Shield size={14}/> RESCUE SHIELD PHASE</div>
             <h2>Protect an <em>ally.</em></h2>
-            <p>Vote for one player to receive the immunity shield against the Traitor's kill tonight.</p>
+            <p>Vote for one player to receive the immunity shield against the Traitor&apos;s kill tonight.</p>
           </div>
 
           {isTraitor ? (
@@ -894,17 +931,21 @@ export default function Home() {
             )}
           </h2>
 
-          <p>
-            {winner==="innocents" 
-              ? "The crew successfully unmasked and eliminated the Traitor!" 
-              : "The Traitor fooled everyone and whittled the crew down to 1 innocent!"}
-          </p>
+          <div className={`winner-banner ${winner==="traitor"?"traitor":"innocents"}`}>
+            <h3>{winner==="traitor" ? "🔴 Traitor Victory!" : "🟢 Innocents Victory!"}</h3>
+            <p>
+              {winner==="traitor" 
+                ? `${traitorName} successfully deceived the crew and survived until the 1 vs 1 showdown!`
+                : `The crew correctly unmasked ${traitorName} and voted them out!`
+              }
+            </p>
+          </div>
 
           <div className="result-word">
-            <small>THE TRAITOR WAS</small>
-            <b>{players.find(p=>p.id===traitorId)?.name || "Secret Bluffer"}</b>
+            <small>THE ACTUAL TRAITOR</small>
+            <b>{traitorName} ({winner==="traitor" ? "WINNER 🏆" : "DEFEATED ❌"})</b>
             <div style={{height:1,background:"#2e2b3b",margin:"14px 0"}}/>
-            <small>THE FINAL SECRET WORD</small>
+            <small>THE SECRET WORD</small>
             <b>{word || "HIDDEN"}</b>
           </div>
 

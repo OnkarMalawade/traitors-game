@@ -29,3 +29,18 @@
 .shield-box svg { color: #64b5f6; flex-shrink: 0; }
 .kill-box { background: #2b171c; border: 1px solid #6b2432; border-radius: 12px; padding: 16px; margin: 18px 0; color: #ffb8c4; font-size: 12px; display: flex; gap: 12px; align-items: center; }
 .kill-box svg { color: var(--red); flex-shrink: 0; }
+
+/* Elimination round banner and winner cards */
+.round-event-card { background: #1c1826; border: 1px solid #3c324e; border-radius: 12px; padding: 14px 16px; margin: 14px 0; display: flex; align-items: center; gap: 12px; font-size: 12px; }
+.round-event-card.voted { border-color: #ff657a55; background: #2b1720; color: #ffb8c4; }
+.round-event-card.killed { border-color: #a48bff55; background: #221c33; color: #d6cbff; }
+.round-event-card.shielded { border-color: #64b5f655; background: #162433; color: #b7e3ff; }
+.round-event-card svg { flex-shrink: 0; }
+.round-event-card b { display: block; font-size: 13px; color: #fff; margin-bottom: 2px; }
+.round-event-card small { display: block; font-size: 11px; opacity: 0.85; }
+
+.winner-banner { padding: 18px; border-radius: 14px; margin: 20px 0; text-align: center; }
+.winner-banner.traitor { background: #3b141d; border: 1px solid var(--red); color: #ffccd5; }
+.winner-banner.innocents { background: #1f3014; border: 1px solid var(--lime); color: #ecffb0; }
+.winner-banner h3 { font: 700 24px 'Space Grotesk'; margin: 0 0 6px; letter-spacing: 0.5px; }
+.winner-banner p { margin: 0; font-size: 12px; opacity: 0.9; line-height: 1.5; }
