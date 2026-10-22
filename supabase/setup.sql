@@ -7,9 +7,9 @@ create table if not exists public.traitor_rooms (
   code text not null unique,
   host_user_id uuid not null,
   host_player_id uuid,
-  max_players int not null check (max_players between 4 and 20),
+  max_players int not null check (max_players between 3 and 20),
   duration_minutes int not null check (duration_minutes in (8,10)),
-  category text not null check (category in ('Places','Brands','Anime','Football','Cricket','Games','Countries')),
+  category text not null check (category in ('Places','Brands','Anime','Football','Cricket','Games','Countries','Animals','Movies','Comics')),
   status text not null default 'lobby' check (status in ('lobby','playing','voting','revealed')),
   created_at timestamptz not null default now(),
   invite_expires_at timestamptz not null default (now() + interval '10 minutes'),
@@ -76,9 +76,9 @@ declare v_user uuid := auth.uid(); v_room public.traitor_rooms; v_player public.
 begin
  if v_user is null then raise exception 'Sign in required'; end if;
  if p_name is null or char_length(trim(p_name)) not between 1 and 24 then raise exception 'Name must be 1–24 characters'; end if;
- if p_max_players not between 4 and 20 then raise exception 'Player limit must be 4–20'; end if;
+ if p_max_players not between 3 and 20 then raise exception 'Player limit must be 3–20'; end if;
  if p_duration not in (8,10) then raise exception 'Duration must be 8 or 10 minutes'; end if;
- if p_category not in ('Places','Brands','Anime','Football','Cricket','Games','Countries') then raise exception 'Invalid category'; end if;
+ if p_category not in ('Places','Brands','Anime','Football','Cricket','Games','Countries','Animals','Movies','Comics') then raise exception 'Invalid category'; end if;
  v_code := upper(substr(replace(gen_random_uuid()::text,'-',''),1,6));
  while exists(select 1 from public.traitor_rooms r where r.code=v_code) loop v_code := upper(substr(replace(gen_random_uuid()::text,'-',''),1,6)); end loop;
  insert into public.traitor_rooms(code,host_user_id,max_players,duration_minutes,category) values(v_code,v_user,p_max_players,p_duration,p_category) returning * into v_room;
@@ -114,7 +114,7 @@ begin
  if not found or v_room.host_user_id <> v_user then raise exception 'Only the host can start this game'; end if;
  if v_room.status <> 'lobby' then raise exception 'Game is not in the lobby'; end if;
  select count(*) into v_count from public.traitor_players p where p.room_id=p_room_id;
- if v_count < 4 then raise exception 'At least 4 players are required'; end if;
+ if v_count < 3 then raise exception 'At least 3 players are required'; end if;
  case v_room.category
  when 'Places' then v_words := array['Tokyo','Eiffel Tower','Grand Canyon','Mumbai','Great Barrier Reef','Taj Mahal','New York','Mount Everest','Santorini','Colosseum'];
  when 'Brands' then v_words := array['Nike','LEGO','Apple','Coca-Cola','Netflix','Adidas','IKEA','Samsung','Spotify','Nintendo'];
@@ -122,6 +122,10 @@ begin
  when 'Football' then v_words := array['Lionel Messi','Cristiano Ronaldo','Neymar Jr.','Kylian Mbappé','Erling Haaland','Sunil Chhetri'];
  when 'Cricket' then v_words := array['Virat Kohli','MS Dhoni','Rohit Sharma','Jasprit Bumrah','AB de Villiers','Sachin Tendulkar'];
  when 'Games' then v_words := array['Minecraft','Fortnite','GTA V','Among Us','Valorant','FIFA','Clash of Clans'];
+ when 'Countries' then v_words := array['Japan','Brazil','India','Iceland','Canada','Egypt','Australia','Argentina'];
+ when 'Animals' then v_words := array['Lion','Elephant','Dolphin','Eagle','Panda','Wolf','Shark','Penguin','Tiger','Cheetah'];
+ when 'Movies' then v_words := array['Inception','Titanic','Avatar','Interstellar','The Dark Knight','Avengers','Jurassic Park','Forrest Gump','The Matrix','Gladiator'];
+ when 'Comics' then v_words := array['Spider-Man','Batman','Iron Man','Superman','Wolverine','Wonder Woman','Thor','The Joker','Deadpool','Black Panther'];
  else v_words := array['Japan','Brazil','India','Iceland','Canada','Egypt','Australia','Argentina'];
  end case;
  select p.id into v_traitor from public.traitor_players p where p.room_id=p_room_id order by random() limit 1;
