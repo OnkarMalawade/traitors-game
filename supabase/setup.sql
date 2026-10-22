@@ -29,6 +29,18 @@ create table if not exists public.traitor_players (
   unique(room_id, id)
 );
 
+create table if not exists public.traitor_chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references public.traitor_rooms(id) on delete cascade,
+  player_id uuid not null,
+  message_text text not null check (char_length(message_text) between 1 and 500),
+  created_at timestamptz not null default now(),
+  foreign key (room_id, player_id) references public.traitor_players(room_id, id) on delete cascade
+);
+
+create index if not exists traitor_chat_messages_room_created_idx
+  on public.traitor_chat_messages(room_id, created_at);
+
 create table if not exists public.traitor_votes (
   room_id uuid not null references public.traitor_rooms(id) on delete cascade,
   voter_player_id uuid not null,
@@ -40,8 +52,9 @@ create table if not exists public.traitor_votes (
 alter table public.traitor_rooms enable row level security;
 alter table public.traitor_players enable row level security;
 alter table public.traitor_votes enable row level security;
+alter table public.traitor_chat_messages enable row level security;
 -- Clients use the security-definer RPCs below; direct table reads/writes are deliberately closed.
-revoke all on public.traitor_rooms, public.traitor_players, public.traitor_votes from anon, authenticated;
+revoke all on public.traitor_rooms, public.traitor_players, public.traitor_votes, public.traitor_chat_messages from anon, authenticated;
 -- Realtime roster visibility is limited to players in the same room.
 create or replace function public.traitor_is_room_member(p_room_id uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
@@ -51,6 +64,11 @@ grant execute on function public.traitor_is_room_member(uuid) to authenticated;
 grant select on public.traitor_players to authenticated;
 drop policy if exists traitor_players_member_select on public.traitor_players;
 create policy traitor_players_member_select on public.traitor_players for select to authenticated using (public.traitor_is_room_member(room_id));
+
+grant select on public.traitor_chat_messages to authenticated;
+drop policy if exists traitor_chat_member_select on public.traitor_chat_messages;
+create policy traitor_chat_member_select on public.traitor_chat_messages for select to authenticated
+  using (public.traitor_is_room_member(room_id));
 
 create or replace function public.traitor_create_room(p_name text, p_max_players int, p_duration int, p_category text)
 returns jsonb language plpgsql security definer set search_path = '' as $$
@@ -160,6 +178,58 @@ begin
  return jsonb_build_object('status','revealed','word',v_room.secret_word,'traitor_player_id',v_room.traitor_player_id,'traitor_name',(select p.display_name from public.traitor_players p where p.id=v_room.traitor_player_id));
 end $$;
 
+create or replace function public.traitor_chat_history(p_room_id uuid)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_user uuid := auth.uid(); v_messages jsonb;
+begin
+ if v_user is null or not exists(select 1 from public.traitor_players p where p.room_id=p_room_id and p.user_id=v_user) then
+   raise exception 'You are not a member of this room';
+ end if;
+ select coalesce(jsonb_agg(jsonb_build_object(
+   'id',m.id,'room_id',m.room_id,'player_id',m.player_id,
+   'name',p.display_name,'text',m.message_text,'sent_at',m.created_at
+ ) order by m.created_at), '[]'::jsonb)
+ into v_messages
+ from (select * from public.traitor_chat_messages where room_id=p_room_id order by created_at desc limit 150) m
+ join public.traitor_players p on p.id=m.player_id and p.room_id=m.room_id;
+ return v_messages;
+end $$;
+
+create or replace function public.traitor_send_chat_message(p_room_id uuid, p_text text)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_user uuid := auth.uid(); v_player public.traitor_players; v_room public.traitor_rooms; v_message public.traitor_chat_messages;
+begin
+ if v_user is null then raise exception 'Sign in required'; end if;
+ select * into v_room from public.traitor_rooms r where r.id=p_room_id;
+ if not found then raise exception 'This lobby no longer exists'; end if;
+ if v_room.status not in ('playing','voting') then raise exception 'Chat is only available during an active game'; end if;
+ select * into v_player from public.traitor_players p where p.room_id=p_room_id and p.user_id=v_user;
+ if not found then raise exception 'You are not a member of this room'; end if;
+ if p_text is null or char_length(trim(p_text)) not between 1 and 500 then raise exception 'Message must be 1–500 characters'; end if;
+ insert into public.traitor_chat_messages(room_id,player_id,message_text)
+ values(p_room_id,v_player.id,trim(p_text)) returning * into v_message;
+ -- Keep only the newest 150 messages per lobby; older chat is automatically pruned.
+ delete from public.traitor_chat_messages m
+ where m.room_id=p_room_id and m.id not in (
+   select recent.id from public.traitor_chat_messages recent
+   where recent.room_id=p_room_id order by recent.created_at desc limit 150
+ );
+ return jsonb_build_object('id',v_message.id,'room_id',v_message.room_id,'player_id',v_player.id,
+   'name',v_player.display_name,'text',v_message.message_text,'sent_at',v_message.created_at);
+end $$;
+
+create or replace function public.traitor_destroy_room(p_room_id uuid)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_user uuid := auth.uid(); v_room public.traitor_rooms;
+begin
+ select * into v_room from public.traitor_rooms r where r.id=p_room_id for update;
+ if not found then return jsonb_build_object('ok',true,'already_destroyed',true); end if;
+ if v_room.host_user_id <> v_user then raise exception 'Only the host can destroy this lobby'; end if;
+ delete from public.traitor_rooms where id=p_room_id;
+ -- Chat, votes and players are removed automatically through ON DELETE CASCADE.
+ return jsonb_build_object('ok',true,'deleted_room_id',p_room_id);
+end $$;
+
 grant execute on function public.traitor_create_room(text,int,int,text) to authenticated;
 grant execute on function public.traitor_join_room(text,text) to authenticated;
 grant execute on function public.traitor_start_game(uuid) to authenticated;
@@ -167,11 +237,20 @@ grant execute on function public.traitor_my_role(uuid) to authenticated;
 grant execute on function public.traitor_room_state(uuid) to authenticated;
 grant execute on function public.traitor_cast_vote(uuid,uuid) to authenticated;
 grant execute on function public.traitor_reveal(uuid) to authenticated;
+grant execute on function public.traitor_chat_history(uuid) to authenticated;
+grant execute on function public.traitor_send_chat_message(uuid,text) to authenticated;
+grant execute on function public.traitor_destroy_room(uuid) to authenticated;
+revoke execute on function public.traitor_chat_history(uuid) from public, anon;
+revoke execute on function public.traitor_send_chat_message(uuid,text) from public, anon;
+revoke execute on function public.traitor_destroy_room(uuid) from public, anon;
 
--- Needed for live roster/status updates. The tables expose only room/player metadata; secrets stay in RPCs.
+-- Needed for live roster/status/chat updates. Chat reads are restricted by room-membership RLS.
 do $$ begin
  alter publication supabase_realtime add table public.traitor_rooms;
 exception when duplicate_object then null; when undefined_object then raise notice 'Publication supabase_realtime not found; enable Realtime in the dashboard.'; end $$;
 do $$ begin
  alter publication supabase_realtime add table public.traitor_players;
+exception when duplicate_object then null; when undefined_object then raise notice 'Publication supabase_realtime not found; enable Realtime in the dashboard.'; end $$;
+do $$ begin
+ alter publication supabase_realtime add table public.traitor_chat_messages;
 exception when duplicate_object then null; when undefined_object then raise notice 'Publication supabase_realtime not found; enable Realtime in the dashboard.'; end $$;
