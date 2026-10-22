@@ -1,6 +1,30 @@
--- MIGRATION SCRIPT: Run this in Supabase SQL Editor to enable Advanced Mode & Multi-Round Rules
--- This is backward compatible and adds game_mode, shield, kill, alive status, and new functions!
+-- TRAITORS: Full Schema supporting Basic & Advanced (multi-round, shield, kill) Modes.
+-- Run this in Supabase SQL Editor to upgrade the backend!
+create extension if not exists pgcrypto;
 
+create table if not exists public.traitor_rooms (
+  id uuid primary key default gen_random_uuid(),
+  code text not null unique,
+  host_user_id uuid not null,
+  host_player_id uuid,
+  max_players int not null check (max_players between 3 and 20),
+  duration_minutes int not null check (duration_minutes in (8,10)),
+  category text not null check (category in ('Places','Brands','Anime','Football','Cricket','Games','Countries','Animals','Movies','Comics')),
+  game_mode text not null default 'basic' check (game_mode in ('basic','advanced')),
+  status text not null default 'lobby' check (status in ('lobby','playing','voting','vote_result','shield','kill','revealed')),
+  round_number int not null default 1,
+  created_at timestamptz not null default now(),
+  invite_expires_at timestamptz not null default (now() + interval '10 minutes'),
+  phase_ends_at timestamptz,
+  secret_word text,
+  traitor_player_id uuid,
+  shielded_player_id uuid,
+  last_killed_player_id uuid,
+  last_voted_out_player_id uuid,
+  winner text check (winner in ('traitor','innocents'))
+);
+
+-- Ensure newly added columns exist if table was already created
 alter table public.traitor_rooms add column if not exists game_mode text not null default 'basic' check (game_mode in ('basic','advanced'));
 alter table public.traitor_rooms add column if not exists round_number int not null default 1;
 alter table public.traitor_rooms add column if not exists shielded_player_id uuid;
@@ -8,6 +32,7 @@ alter table public.traitor_rooms add column if not exists last_killed_player_id 
 alter table public.traitor_rooms add column if not exists last_voted_out_player_id uuid;
 alter table public.traitor_rooms add column if not exists winner text check (winner in ('traitor','innocents'));
 
+-- Update constraints
 alter table public.traitor_rooms drop constraint if exists traitor_rooms_max_players_check;
 alter table public.traitor_rooms add constraint traitor_rooms_max_players_check check (max_players between 3 and 20);
 
@@ -17,18 +42,69 @@ alter table public.traitor_rooms add constraint traitor_rooms_category_check che
 alter table public.traitor_rooms drop constraint if exists traitor_rooms_status_check;
 alter table public.traitor_rooms add constraint traitor_rooms_status_check check (status in ('lobby','playing','voting','vote_result','shield','kill','revealed'));
 
+create table if not exists public.traitor_players (
+  id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references public.traitor_rooms(id) on delete cascade,
+  user_id uuid not null,
+  display_name text not null check (char_length(display_name) between 1 and 24),
+  is_host boolean not null default false,
+  is_alive boolean not null default true,
+  joined_at timestamptz not null default now(),
+  unique(room_id, user_id),
+  unique(room_id, id)
+);
+
 alter table public.traitor_players add column if not exists is_alive boolean not null default true;
+
+create table if not exists public.traitor_chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references public.traitor_rooms(id) on delete cascade,
+  player_id uuid not null,
+  message_text text not null check (char_length(message_text) between 1 and 500),
+  created_at timestamptz not null default now(),
+  foreign key (room_id, player_id) references public.traitor_players(room_id, id) on delete cascade
+);
+
+create index if not exists traitor_chat_messages_room_created_idx
+  on public.traitor_chat_messages(room_id, created_at);
+
+create table if not exists public.traitor_votes (
+  room_id uuid not null references public.traitor_rooms(id) on delete cascade,
+  round_number int not null default 1,
+  vote_type text not null default 'eliminate' check (vote_type in ('eliminate','shield')),
+  voter_player_id uuid not null,
+  target_player_id uuid not null,
+  created_at timestamptz not null default now(),
+  primary key(room_id, round_number, vote_type, voter_player_id)
+);
 
 alter table public.traitor_votes add column if not exists round_number int not null default 1;
 alter table public.traitor_votes add column if not exists vote_type text not null default 'eliminate';
 
--- Update primary key on traitor_votes safely
-do $$ begin
-  alter table public.traitor_votes drop constraint if exists traitor_votes_pkey;
-  alter table public.traitor_votes add primary key(room_id, round_number, vote_type, voter_player_id);
-exception when others then null; end $$;
+-- RLS setup
+alter table public.traitor_rooms enable row level security;
+alter table public.traitor_players enable row level security;
+alter table public.traitor_votes enable row level security;
+alter table public.traitor_chat_messages enable row level security;
 
--- Word helper function
+revoke all on public.traitor_rooms, public.traitor_players, public.traitor_votes, public.traitor_chat_messages from anon, authenticated;
+
+create or replace function public.traitor_is_room_member(p_room_id uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+ select exists(select 1 from public.traitor_players p where p.room_id=p_room_id and p.user_id=auth.uid())
+$$;
+
+grant execute on function public.traitor_is_room_member(uuid) to authenticated;
+grant select on public.traitor_players to authenticated;
+drop policy if exists traitor_players_member_select on public.traitor_players;
+create policy traitor_players_member_select on public.traitor_players for select to authenticated using (public.traitor_is_room_member(room_id));
+
+grant select on public.traitor_chat_messages to authenticated;
+drop policy if exists traitor_chat_member_select on public.traitor_chat_messages;
+create policy traitor_chat_member_select on public.traitor_chat_messages for select to authenticated
+  using (public.traitor_is_room_member(room_id));
+
+-- Helper to pick a random word
 create or replace function public.traitor_pick_word(p_category text) returns text
 language plpgsql security definer set search_path = '' as $$
 declare v_words text[];
@@ -49,7 +125,7 @@ begin
   return v_words[1+floor(random()*array_length(v_words,1))::int];
 end $$;
 
--- 1. Create Room (with game mode option)
+-- 1. Create Room
 create or replace function public.traitor_create_room(
   p_name text,
   p_max_players int,
@@ -132,6 +208,7 @@ begin
  select count(*) into v_count from public.traitor_players p where p.room_id=p_room_id;
  if v_count < 3 then raise exception 'At least 3 players are required'; end if;
 
+ -- In Advanced mode, category is randomly selected each round
  if v_room.game_mode = 'advanced' then
    v_cat := v_all_cats[1+floor(random()*array_length(v_all_cats,1))::int];
  else
@@ -215,7 +292,7 @@ begin
  );
 end $$;
 
--- 6. Cast Eliminate Vote
+-- 6. Cast Vote (Eliminate Vote)
 create or replace function public.traitor_cast_vote(p_room_id uuid, p_target_player_id uuid)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
@@ -247,6 +324,7 @@ declare
  v_user uuid := auth.uid();
  v_room public.traitor_rooms;
  v_alive_count int;
+ v_vote_count int;
  v_target uuid;
  v_is_traitor boolean;
  v_alive_innocents int;
@@ -254,6 +332,10 @@ begin
  select * into v_room from public.traitor_rooms r where r.id=p_room_id for update;
  if not found then raise exception 'Room not found'; end if;
 
+ select count(*) into v_alive_count from public.traitor_players where room_id=p_room_id and is_alive=true;
+ select count(*) into v_vote_count from public.traitor_votes where room_id=p_room_id and round_number=v_room.round_number and vote_type='eliminate';
+
+ -- Determine highest voted alive player
  select target_player_id into v_target
  from public.traitor_votes
  where room_id=p_room_id and round_number=v_room.round_number and vote_type='eliminate'
@@ -262,12 +344,15 @@ begin
  limit 1;
 
  if v_target is null then
+   -- If no votes cast (timeout), pick random alive player
    select id into v_target from public.traitor_players where room_id=p_room_id and is_alive=true order by random() limit 1;
  end if;
 
+ -- Eliminate that player
  update public.traitor_players set is_alive=false where id=v_target;
  v_is_traitor := (v_target = v_room.traitor_player_id);
 
+ -- Basic mode ends immediately
  if v_room.game_mode = 'basic' then
    update public.traitor_rooms
    set status='revealed',
@@ -285,6 +370,8 @@ begin
    );
  end if;
 
+ -- Advanced Mode logic:
+ -- If traitor was voted out -> INNOCENTS WIN!
  if v_is_traitor then
    update public.traitor_rooms
    set status='revealed',
@@ -302,10 +389,12 @@ begin
    );
  end if;
 
+ -- Traitor survived! Check remaining alive innocents
  select count(*) into v_alive_innocents from public.traitor_players
  where room_id=p_room_id and is_alive=true and id <> v_room.traitor_player_id;
 
  if v_alive_innocents <= 1 then
+   -- Traitor wins (1 vs 1 or less)
    update public.traitor_rooms
    set status='revealed',
        last_voted_out_player_id=v_target,
@@ -322,6 +411,8 @@ begin
    );
  end if;
 
+ -- Move to vote_result screen or next phase
+ -- Check if total remaining alive players >= 5 -> SHIELD phase, else -> KILL phase
  select count(*) into v_alive_count from public.traitor_players where room_id=p_room_id and is_alive=true;
 
  update public.traitor_rooms
@@ -337,7 +428,7 @@ begin
  );
 end $$;
 
--- 8. Advance Phase to Shield or Kill
+-- 8. Proceed to Shield / Kill Phase (after viewing vote result)
 create or replace function public.traitor_advance_phase(p_room_id uuid)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
@@ -357,7 +448,7 @@ begin
  end if;
 end $$;
 
--- 9. Cast Shield Vote
+-- 9. Shield Vote (Innocents vote to rescue a player)
 create or replace function public.traitor_cast_shield(p_room_id uuid, p_target_player_id uuid)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
@@ -370,10 +461,12 @@ begin
  select * into v_room from public.traitor_rooms r where r.id=p_room_id;
  if v_room.status <> 'shield' then raise exception 'Shield voting is not open'; end if;
 
+ -- Traitor cannot vote for shield
  if v_voter.id = v_room.traitor_player_id then
    raise exception 'The traitor cannot grant shields';
  end if;
 
+ -- Traitor cannot be given the shield!
  if p_target_player_id = v_room.traitor_player_id then
    raise exception 'Cannot shield the traitor';
  end if;
@@ -390,7 +483,7 @@ begin
  return jsonb_build_object('ok',true);
 end $$;
 
--- 10. Resolve Shield
+-- 10. Resolve Shield & Move to Kill Phase
 create or replace function public.traitor_resolve_shield(p_room_id uuid)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
@@ -416,7 +509,7 @@ begin
  return jsonb_build_object('status','kill','shielded_player_id',v_shielded);
 end $$;
 
--- 11. Traitor Kill Player
+-- 11. Traitor Kill Action
 create or replace function public.traitor_kill_player(p_room_id uuid, p_target_player_id uuid)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
@@ -439,19 +532,24 @@ begin
    raise exception 'Invalid kill target';
  end if;
 
+ -- Check if target is shielded
  if v_room.shielded_player_id = p_target_player_id then
+   -- Blocked by shield!
    v_killed := false;
    update public.traitor_rooms set last_killed_player_id=null where id=p_room_id;
  else
+   -- Player is killed
    v_killed := true;
    update public.traitor_players set is_alive=false where id=p_target_player_id;
    update public.traitor_rooms set last_killed_player_id=p_target_player_id where id=p_room_id;
  end if;
 
+ -- Check Win Condition: How many innocents left alive?
  select count(*) into v_alive_innocents from public.traitor_players
  where room_id=p_room_id and is_alive=true and id <> v_room.traitor_player_id;
 
  if v_alive_innocents <= 1 then
+   -- Traitor Wins! (1 vs 1)
    update public.traitor_rooms
    set status='revealed',
        winner='traitor'
@@ -466,6 +564,7 @@ begin
      'traitor_player_id',v_room.traitor_player_id
    );
  else
+   -- Next Round setup!
    v_new_cat := v_all_cats[1+floor(random()*array_length(v_all_cats,1))::int];
    v_new_word := public.traitor_pick_word(v_new_cat);
 
@@ -487,7 +586,7 @@ begin
  end if;
 end $$;
 
--- 12. Reveal
+-- 12. Reveal (compatibility & final state)
 create or replace function public.traitor_reveal(p_room_id uuid)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare v_user uuid := auth.uid(); v_room public.traitor_rooms; v_member boolean;
@@ -508,7 +607,61 @@ begin
  );
 end $$;
 
--- Grant permissions for all new RPCs
+-- 13. Chat Functions
+create or replace function public.traitor_chat_history(p_room_id uuid)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_user uuid := auth.uid(); v_messages jsonb;
+begin
+ if v_user is null or not exists(select 1 from public.traitor_players p where p.room_id=p_room_id and p.user_id=v_user) then
+   raise exception 'You are not a member of this room';
+ end if;
+ select coalesce(jsonb_agg(jsonb_build_object(
+   'id',m.id,'room_id',m.room_id,'player_id',m.player_id,
+   'name',p.display_name,'text',m.message_text,'sent_at',m.created_at
+ ) order by m.created_at), '[]'::jsonb)
+ into v_messages
+ from (select * from public.traitor_chat_messages where room_id=p_room_id order by created_at desc limit 150) m
+ join public.traitor_players p on p.id=m.player_id and p.room_id=m.room_id;
+ return v_messages;
+end $$;
+
+create or replace function public.traitor_send_chat_message(p_room_id uuid, p_text text)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_user uuid := auth.uid(); v_player public.traitor_players; v_room public.traitor_rooms; v_message public.traitor_chat_messages;
+begin
+ if v_user is null then raise exception 'Sign in required'; end if;
+ select * into v_room from public.traitor_rooms r where r.id=p_room_id;
+ if not found then raise exception 'This lobby no longer exists'; end if;
+ if v_room.status not in ('playing','voting','shield','kill','vote_result') then
+   raise exception 'Chat is only available during an active game';
+ end if;
+ select * into v_player from public.traitor_players p where p.room_id=p_room_id and p.user_id=v_user;
+ if not found then raise exception 'You are not a member of this room'; end if;
+ if p_text is null or char_length(trim(p_text)) not between 1 and 500 then raise exception 'Message must be 1–500 characters'; end if;
+
+ insert into public.traitor_chat_messages(room_id,player_id,message_text)
+ values(p_room_id,v_player.id,trim(p_text)) returning * into v_message;
+
+ delete from public.traitor_chat_messages m
+ where m.room_id=p_room_id and m.id not in (
+   select recent.id from public.traitor_chat_messages recent
+   where recent.room_id=p_room_id order by recent.created_at desc limit 150
+ );
+ return jsonb_build_object('id',v_message.id,'room_id',v_message.room_id,'player_id',v_player.id,
+   'name',v_player.display_name,'text',v_message.message_text,'sent_at',v_message.created_at);
+end $$;
+
+create or replace function public.traitor_destroy_room(p_room_id uuid)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_user uuid := auth.uid(); v_room public.traitor_rooms;
+begin
+ select * into v_room from public.traitor_rooms r where r.id=p_room_id for update;
+ if not found then return jsonb_build_object('ok',true,'already_destroyed',true); end if;
+ if v_room.host_user_id <> v_user then raise exception 'Only the host can destroy this lobby'; end if;
+ delete from public.traitor_rooms where id=p_room_id;
+ return jsonb_build_object('ok',true,'deleted_room_id',p_room_id);
+end $$;
+
 grant execute on function public.traitor_create_room(text,int,int,text,text) to authenticated;
 grant execute on function public.traitor_join_room(text,text) to authenticated;
 grant execute on function public.traitor_start_game(uuid) to authenticated;
@@ -521,3 +674,20 @@ grant execute on function public.traitor_cast_shield(uuid,uuid) to authenticated
 grant execute on function public.traitor_resolve_shield(uuid) to authenticated;
 grant execute on function public.traitor_kill_player(uuid,uuid) to authenticated;
 grant execute on function public.traitor_reveal(uuid) to authenticated;
+grant execute on function public.traitor_chat_history(uuid) to authenticated;
+grant execute on function public.traitor_send_chat_message(uuid,text) to authenticated;
+grant execute on function public.traitor_destroy_room(uuid) to authenticated;
+
+revoke execute on function public.traitor_chat_history(uuid) from public, anon;
+revoke execute on function public.traitor_send_chat_message(uuid,text) from public, anon;
+revoke execute on function public.traitor_destroy_room(uuid) from public, anon;
+
+do $$ begin
+ alter publication supabase_realtime add table public.traitor_rooms;
+exception when duplicate_object then null; when undefined_object then raise notice 'Publication supabase_realtime not found; enable Realtime in the dashboard.'; end $$;
+do $$ begin
+ alter publication supabase_realtime add table public.traitor_players;
+exception when duplicate_object then null; when undefined_object then raise notice 'Publication supabase_realtime not found; enable Realtime in the dashboard.'; end $$;
+do $$ begin
+ alter publication supabase_realtime add table public.traitor_chat_messages;
+exception when duplicate_object then null; when undefined_object then raise notice 'Publication supabase_realtime not found; enable Realtime in the dashboard.'; end $$;
