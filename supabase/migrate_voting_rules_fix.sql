@@ -96,6 +96,9 @@ begin
   if not found or not v_voter.is_alive then raise exception 'Only alive players can vote'; end if;
   select * into v_room from public.traitor_rooms r where r.id=p_room_id;
   if v_room.status not in ('playing','voting') then raise exception 'Voting is not open'; end if;
+  if p_target_player_id = v_voter.id then
+    raise exception 'You cannot vote for yourself';
+  end if;
   if not exists(select 1 from public.traitor_players p where p.id=p_target_player_id and p.room_id=p_room_id and p.is_alive) then
     raise exception 'Invalid vote target (must be an alive player)';
   end if;
@@ -309,6 +312,11 @@ begin
   -- Traitor cannot vote for shield
   if v_voter.id = v_room.traitor_player_id then
     raise exception 'The traitor cannot grant shields';
+  end if;
+
+  -- Cannot shield yourself
+  if p_target_player_id = v_voter.id then
+    raise exception 'You cannot grant the rescue shield to yourself';
   end if;
 
   -- Traitor cannot be given the shield!

@@ -846,14 +846,14 @@ export default function Home() {
           ) : (
             <>
               <div className="vote-list">
-                {alivePlayers.map(p=>(
+                {alivePlayers.filter(p=>p.id!==playerId).map(p=>(
                   <button 
                     key={p.id} 
                     className={`vote-player ${selectedVote===p.id?"vote-selected":""}`} 
                     onClick={()=>setSelectedVote(p.id)}
                   >
                     <div className="avatar av2">{p.name.slice(0,1).toUpperCase()}</div>
-                    <span>{p.name}{p.id===playerId&&" (You)"}</span>
+                    <span>{p.name}</span>
                     <span className="vote-radio">{selectedVote===p.id&&<Check size={14}/>}</span>
                   </button>
                 ))}
@@ -957,14 +957,14 @@ export default function Home() {
           ) : (
             <>
               <div className="vote-list">
-                {alivePlayers.map(p=>(
+                {alivePlayers.filter(p=>p.id!==playerId).map(p=>(
                   <button 
                     key={p.id} 
                     className={`vote-player ${selectedShield===p.id?"vote-selected":""}`} 
                     onClick={()=>setSelectedShield(p.id)}
                   >
                     <div className="avatar av3">{p.name.slice(0,1).toUpperCase()}</div>
-                    <span>{p.name}{p.id===playerId&&" (Self)"}</span>
+                    <span>{p.name}</span>
                     <span className="vote-radio">{selectedShield===p.id&&<Check size={14}/>}</span>
                   </button>
                 ))}
