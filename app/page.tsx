@@ -83,6 +83,11 @@ export default function Home() {
   const [selectedKill,setSelectedKill] = useState("");
   const [toast,setToast] = useState("");
   const [round,setRound] = useState(1);
+  const [votesCast,setVotesCast] = useState(0);
+  const [shieldVotesCast,setShieldVotesCast] = useState(0);
+  const [hasVoted,setHasVoted] = useState(false);
+  const [hasShieldVoted,setHasShieldVoted] = useState(false);
+  const prevRoundRef = useRef(1);
   const [joinCode,setJoinCode] = useState("");
   const [joinedName,setJoinedName] = useState("");
   const [traitorId,setTraitorId] = useState("");
@@ -174,7 +179,26 @@ export default function Home() {
       setDuration(r.duration_minutes);
       setCategory(r.category);
       setGameMode(r.game_mode||"basic");
-      setRound(r.round_number||1);
+      const newRound = r.round_number || 1;
+      const isNewRound = newRound > prevRoundRef.current;
+      if (isNewRound) {
+        prevRoundRef.current = newRound;
+        setRound(newRound);
+        setSelectedVote("");
+        setSelectedShield("");
+        setSelectedKill("");
+        setHasVoted(false);
+        setHasShieldVoted(false);
+        if (r.status === "playing") {
+          setScreen("role");
+        }
+      } else {
+        setRound(newRound);
+      }
+      setVotesCast(r.votes_cast || 0);
+      setShieldVotesCast(r.shield_votes_cast || 0);
+      setHasVoted(!!r.has_voted);
+      setHasShieldVoted(!!r.has_shield_voted);
       setShieldedId(r.shielded_player_id||"");
       setLastKilledId(r.last_killed_player_id||"");
       setLastVotedOutId(r.last_voted_out_player_id||"");
@@ -293,14 +317,26 @@ export default function Home() {
   const submitVote = async () => {
     if(!selectedVote){setToast("Choose who you suspect");return;}
     try {
-      const {error}=await getSupabase().rpc("traitor_cast_vote",{p_room_id:roomId,p_target_player_id:selectedVote});
+      const {data,error}=await getSupabase().rpc("traitor_cast_vote",{p_room_id:roomId,p_target_player_id:selectedVote});
       if(error) throw error;
-      setToast("Vote locked in! Resolving votes...");
-      const {data:res,error:resErr}=await getSupabase().rpc("traitor_resolve_vote",{p_room_id:roomId});
-      if(!resErr && res) {
-        await refreshRoom(roomId);
+      setHasVoted(true);
+      const res=data as any;
+      if(res?.resolved) {
+        setToast("All votes locked in! Resolving verdict...");
+      } else {
+        setToast(`Vote locked in! (${res?.votes_cast || 1}/${res?.alive_count || alivePlayers.length} ready)`);
       }
+      await refreshRoom(roomId);
     } catch(e:any){setToast(e?.message||"Could not submit vote.");}
+  };
+
+  const forceResolveVote = async () => {
+    try {
+      const {error}=await getSupabase().rpc("traitor_resolve_vote",{p_room_id:roomId});
+      if(error) throw error;
+      setToast("Tallying votes now...");
+      await refreshRoom(roomId);
+    } catch(e:any){setToast(e?.message||"Could not resolve votes.");}
   };
 
   const advanceFromVoteResult = async () => {
@@ -314,12 +350,26 @@ export default function Home() {
   const submitShield = async () => {
     if(!selectedShield){setToast("Pick an innocent player to rescue");return;}
     try {
-      const {error}=await getSupabase().rpc("traitor_cast_shield",{p_room_id:roomId,p_target_player_id:selectedShield});
+      const {data,error}=await getSupabase().rpc("traitor_cast_shield",{p_room_id:roomId,p_target_player_id:selectedShield});
       if(error) throw error;
-      setToast("Shield vote registered!");
-      const {error:resErr}=await getSupabase().rpc("traitor_resolve_shield",{p_room_id:roomId});
-      if(!resErr) await refreshRoom(roomId);
+      setHasShieldVoted(true);
+      const res=data as any;
+      if(res?.resolved) {
+        setToast("All shield votes in! Shield granted.");
+      } else {
+        setToast(`Shield vote registered! (${res?.shield_votes || 1}/${res?.needed || Math.max(1, alivePlayers.length - 1)} voted)`);
+      }
+      await refreshRoom(roomId);
     } catch(e:any){setToast(e?.message||"Could not submit shield vote.");}
+  };
+
+  const forceResolveShield = async () => {
+    try {
+      const {error}=await getSupabase().rpc("traitor_resolve_shield",{p_room_id:roomId});
+      if(error) throw error;
+      setToast("Resolving shield now...");
+      await refreshRoom(roomId);
+    } catch(e:any){setToast(e?.message||"Could not resolve shield.");}
   };
 
   const submitKill = async () => {
@@ -369,6 +419,11 @@ export default function Home() {
     setSelectedShield("");
     setSelectedKill("");
     setRound(1);
+    setVotesCast(0);
+    setShieldVotesCast(0);
+    setHasVoted(false);
+    setHasShieldVoted(false);
+    prevRoundRef.current = 1;
     setChatMessages([]);
     setChatDraft("");
     setChatUnread(0);
@@ -662,12 +717,20 @@ export default function Home() {
           {/* Previous round activity feed */}
           {round > 1 && (
             <div style={{marginTop: 10}}>
-              {lastVotedPlayerName && (
+              {lastVotedPlayerName ? (
                 <div className="round-event-card voted">
                   <Skull size={18}/>
                   <div>
                     <b>Round {round - 1} Vote: {lastVotedPlayerName} was voted out!</b>
                     <small>The crew eliminated an innocent player. The Traitor survived!</small>
+                  </div>
+                </div>
+              ) : (
+                <div className="round-event-card tied">
+                  <AlertTriangle size={18}/>
+                  <div>
+                    <b>Round {round - 1} Vote: Stalemate!</b>
+                    <small>Votes were tied or inconclusive. Nobody was voted out — the Traitor survived!</small>
                   </div>
                 </div>
               )}
@@ -764,26 +827,49 @@ export default function Home() {
           <div className="panel-heading">
             <div className="eyebrow">{gameMode==="advanced"?`ROUND ${round} / ELIMINATION VOTE`:"FINAL DECISION"}</div>
             <h2>Who is the <em>traitor?</em></h2>
-            <p>Pick the player you suspect is bluffing. Dead players cannot vote.</p>
+            <p>Pick the player you suspect is bluffing. A decisive majority is required to unmask the Traitor.</p>
           </div>
 
-          <div className="vote-list">
-            {alivePlayers.map(p=>(
-              <button 
-                key={p.id} 
-                className={`vote-player ${selectedVote===p.id?"vote-selected":""}`} 
-                onClick={()=>setSelectedVote(p.id)}
-              >
-                <div className="avatar av2">{p.name.slice(0,1).toUpperCase()}</div>
-                <span>{p.name}{p.id===playerId&&" (You)"}</span>
-                <span className="vote-radio">{selectedVote===p.id&&<Check size={14}/>}</span>
+          <div className="vote-progress">
+            <span>VOTING PROGRESS</span>
+            <b>{votesCast} / {alivePlayers.length} VOTED</b>
+          </div>
+
+          {hasVoted ? (
+            <div className="vote-status-card">
+              <Check size={22}/>
+              <div>
+                <b>Vote locked in!</b>
+                <p>Waiting for other players to submit their votes ({votesCast}/{alivePlayers.length} ready)...</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="vote-list">
+                {alivePlayers.map(p=>(
+                  <button 
+                    key={p.id} 
+                    className={`vote-player ${selectedVote===p.id?"vote-selected":""}`} 
+                    onClick={()=>setSelectedVote(p.id)}
+                  >
+                    <div className="avatar av2">{p.name.slice(0,1).toUpperCase()}</div>
+                    <span>{p.name}{p.id===playerId&&" (You)"}</span>
+                    <span className="vote-radio">{selectedVote===p.id&&<Check size={14}/>}</span>
+                  </button>
+                ))}
+              </div>
+
+              <button className="btn primary full" onClick={submitVote}>
+                <Vote size={18}/> Lock in vote
               </button>
-            ))}
-          </div>
+            </>
+          )}
 
-          <button className="btn primary full" onClick={submitVote}>
-            <Vote size={18}/> Lock in vote
-          </button>
+          {isHost && (
+            <button className="btn secondary full" onClick={forceResolveVote} style={{marginTop: 12}}>
+              Host: Tally votes now ({votesCast}/{alivePlayers.length})
+            </button>
+          )}
         </section>
       )}
 
@@ -796,13 +882,23 @@ export default function Home() {
             <p>Here is who was voted out this round.</p>
           </div>
 
-          <div className="kill-box">
-            <Skull size={28}/>
-            <div>
-              <b>{players.find(p=>p.id===lastVotedOutId)?.name || "A player"} was voted out!</b>
-              <p>They were an <b>Innocent</b> player. The Traitor is still among you!</p>
+          {lastVotedOutId ? (
+            <div className="kill-box">
+              <Skull size={28}/>
+              <div>
+                <b>{players.find(p=>p.id===lastVotedOutId)?.name || "A player"} was voted out!</b>
+                <p>They were an <b>Innocent</b> player. The Traitor is still among you!</p>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="deadlock-box">
+              <AlertTriangle size={28}/>
+              <div>
+                <b>⚖️ Stalemate — Vote Was Tied!</b>
+                <p>The crew was divided and could not agree on a clear majority. <b>Nobody was eliminated.</b> The Traitor slipped away in the confusion!</p>
+              </div>
+            </div>
+          )}
 
           {alivePlayers.length >= 5 ? (
             <div className="shield-box">
@@ -837,12 +933,25 @@ export default function Home() {
             <p>Vote for one player to receive the immunity shield against the Traitor&apos;s kill tonight.</p>
           </div>
 
+          <div className="vote-progress">
+            <span>SHIELD VOTES</span>
+            <b>{shieldVotesCast} / {Math.max(1, alivePlayers.length - 1)} INNOCENTS VOTED</b>
+          </div>
+
           {isTraitor ? (
             <div className="kill-box">
               <LockKeyhole size={24}/>
               <div>
                 <b>You are the Traitor</b>
-                <p>You cannot grant shields. Waiting for innocents to vote...</p>
+                <p>You cannot grant shields. Waiting for innocents to vote ({shieldVotesCast}/{Math.max(1, alivePlayers.length - 1)} ready)...</p>
+              </div>
+            </div>
+          ) : hasShieldVoted ? (
+            <div className="vote-status-card">
+              <ShieldCheck size={22}/>
+              <div>
+                <b>Shield vote locked in!</b>
+                <p>Waiting for fellow innocents to vote ({shieldVotesCast}/{Math.max(1, alivePlayers.length - 1)} ready)...</p>
               </div>
             </div>
           ) : (
@@ -864,6 +973,12 @@ export default function Home() {
                 <ShieldCheck size={18}/> Grant Rescue Shield
               </button>
             </>
+          )}
+
+          {isHost && (
+            <button className="btn secondary full" onClick={forceResolveShield} style={{marginTop: 12}}>
+              Host: Grant shield now ({shieldVotesCast}/{Math.max(1, alivePlayers.length - 1)})
+            </button>
           )}
         </section>
       )}

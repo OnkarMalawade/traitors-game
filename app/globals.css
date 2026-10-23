@@ -35,9 +35,23 @@
 .round-event-card.voted { border-color: #ff657a55; background: #2b1720; color: #ffb8c4; }
 .round-event-card.killed { border-color: #a48bff55; background: #221c33; color: #d6cbff; }
 .round-event-card.shielded { border-color: #64b5f655; background: #162433; color: #b7e3ff; }
+.round-event-card.tied { border-color: #ffd16655; background: #262115; color: #ffe6a7; }
 .round-event-card svg { flex-shrink: 0; }
 .round-event-card b { display: block; font-size: 13px; color: #fff; margin-bottom: 2px; }
 .round-event-card small { display: block; font-size: 11px; opacity: 0.85; }
+
+.deadlock-box { background: #262115; border: 1px solid #735a26; border-radius: 12px; padding: 16px; margin: 18px 0; color: #ffe6a7; font-size: 12px; display: flex; gap: 12px; align-items: center; }
+.deadlock-box svg { color: #ffd166; flex-shrink: 0; }
+.deadlock-box b { display: block; font-size: 14px; color: #fff; margin-bottom: 4px; }
+.deadlock-box p { margin: 0; font-size: 12px; line-height: 1.5; }
+
+.vote-status-card { background: #161e14; border: 1px solid #3c542a; border-radius: 12px; padding: 14px 16px; margin: 16px 0; display: flex; align-items: center; gap: 12px; font-size: 12px; color: #d7f5b5; }
+.vote-status-card svg { color: var(--lime); flex-shrink: 0; }
+.vote-status-card b { display: block; font-size: 13px; color: #fff; margin-bottom: 2px; }
+.vote-status-card p { margin: 0; font-size: 11px; opacity: 0.85; }
+
+.vote-progress { display: flex; justify-content: space-between; align-items: center; font: 10px 'DM Mono'; color: var(--muted); margin: 12px 0 6px; }
+.vote-progress b { color: var(--lime); }
 
 .winner-banner { padding: 18px; border-radius: 14px; margin: 20px 0; text-align: center; }
 .winner-banner.traitor { background: #3b141d; border: 1px solid var(--red); color: #ffccd5; }
