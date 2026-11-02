@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Traitors — Trust No One",
+    "slug": "traitors-game",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0e0d12",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.onkar.traitors",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Traitors needs microphone access for live voice chat during the discussion phase."
+      }
+    },
+    "android": {
+      "package": "com.onkar.traitors",
+      "adaptiveIcon": {
+        "backgroundColor": "#0e0d12"
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": []
+  }
+}
+

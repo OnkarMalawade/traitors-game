@@ -2,8 +2,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { ensureAnonymousSession, getSupabase } from "../lib/supabase";
+import { useVoiceChat } from "../lib/useVoiceChat";
 import { 
-  ArrowRight, ArrowLeft, Copy, Crown, Eye, EyeOff, Link2, LockKeyhole, Plus, Shield, Sparkles, Timer, Users, Vote, X, Check, Volume2, Shuffle, Ghost, CircleHelp, Zap, MessageCircle, Send, Wifi, UsersRound, Skull, ShieldCheck, Swords, Trophy, AlertTriangle
+  ArrowRight, ArrowLeft, Copy, Crown, Eye, EyeOff, Link2, LockKeyhole, Plus, Shield, Sparkles, Timer, Users, Vote, X, Check, Volume2, VolumeX, Mic, MicOff, Radio, Shuffle, Ghost, CircleHelp, Zap, MessageCircle, Send, Wifi, UsersRound, Skull, ShieldCheck, Swords, Trophy, AlertTriangle
 } from "lucide-react";
 
 type Screen = "home" | "setup" | "join" | "lobby" | "role" | "game" | "vote" | "vote_result" | "shield" | "kill" | "reveal";
@@ -102,6 +103,24 @@ export default function Home() {
   const [chatConnected,setChatConnected] = useState(false);
   const [chatUnread,setChatUnread] = useState(0);
   const chatChannelRef = useRef<any>(null);
+
+  const {
+    isVoiceConnected,
+    isConnecting: isVoiceConnecting,
+    isMuted,
+    isDeafened,
+    voicePeers,
+    speakingPlayers,
+    joinVoice,
+    leaveVoice,
+    toggleMute,
+    toggleDeafen
+  } = useVoiceChat({
+    roomId,
+    playerId,
+    playerName: name || joinedName || "Player",
+    autoJoin: false
+  });
 
   const shareUrl = typeof window !== "undefined" && roomCode ? `${window.location.origin}/?join=${roomCode}` : "";
   const alivePlayers = useMemo(()=>players.filter(p=>p.alive!==false),[players]);
@@ -402,6 +421,7 @@ export default function Home() {
   };
 
   const reset = () => {
+    leaveVoice();
     clearLobbySession();
     setScreen("home");
     setPlayers([]);
@@ -642,7 +662,7 @@ export default function Home() {
               </div>
               {players.map((p,i)=>(
                 <div className={`player-row ${p.alive===false?"dead":""}`} key={p.id}>
-                  <div className={`avatar av${i%6}`}>{p.name.slice(0,1).toUpperCase()}</div>
+                  <div className={`avatar av${i%6} ${speakingPlayers[p.id]?"speaking":""}`}>{p.name.slice(0,1).toUpperCase()}</div>
                   <span>
                     {p.name}
                     {p.host&&<small className="host-label">HOST</small>}
@@ -790,7 +810,7 @@ export default function Home() {
                 ) : (
                   chatMessages.map(m=>(
                     <div key={m.id} className={`chat-message ${m.playerId===playerId?"mine":""}`}>
-                      <div className="avatar av1">{m.name.slice(0,1).toUpperCase()}</div>
+                      <div className={`avatar av1 ${speakingPlayers[m.playerId]?"speaking":""}`}>{m.name.slice(0,1).toUpperCase()}</div>
                       <div className="chat-message-content">
                         <div className="chat-message-meta">
                           <b>{m.name}{m.playerId===playerId&&<span className="you-label">YOU</span>}</b>
@@ -1071,6 +1091,51 @@ export default function Home() {
             Back to lobby
           </button>
         </section>
+      )}
+
+      {/* Real-time Voice Chat Dock */}
+      {roomId && playerId && !["home", "setup", "join"].includes(screen) && (
+        <div className="voice-dock">
+          {!isVoiceConnected ? (
+            <button 
+              className="btn primary" 
+              style={{ padding: "8px 14px", fontSize: 11, borderRadius: 20 }}
+              onClick={joinVoice}
+              disabled={isVoiceConnecting}
+            >
+              <Radio size={14}/> {isVoiceConnecting ? "Connecting Voice..." : "Join Voice Chat"}
+            </button>
+          ) : (
+            <>
+              <div className="voice-dock-status">
+                <span className="voice-live-dot"/>
+                <span>VOICE <span className="voice-count">({voicePeers.length + 1})</span></span>
+              </div>
+              <button 
+                className={`voice-dock-btn ${isMuted ? "muted" : "active"}`}
+                onClick={toggleMute}
+                title={isMuted ? "Unmute Microphone" : "Mute Microphone"}
+              >
+                {isMuted ? <MicOff size={16}/> : <Mic size={16}/>}
+              </button>
+              <button 
+                className={`voice-dock-btn ${isDeafened ? "muted" : ""}`}
+                onClick={toggleDeafen}
+                title={isDeafened ? "Undeafen Audio" : "Deafen Audio"}
+              >
+                {isDeafened ? <VolumeX size={16}/> : <Volume2 size={16}/>}
+              </button>
+              <button 
+                className="voice-dock-btn"
+                onClick={leaveVoice}
+                title="Disconnect Voice"
+                style={{ color: "var(--red)" }}
+              >
+                <X size={16}/>
+              </button>
+            </>
+          )}
+        </div>
       )}
 
       {toast && (
