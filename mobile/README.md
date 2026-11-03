@@ -46,3 +46,4 @@ To build a standalone installable `.apk` file:
 ```bash
 npx expo run:android
 ```
+
